@@ -1,6 +1,6 @@
 # vamshi-portfolio
 
-Personal portfolio and technical blog for **Vamshi Raj Goud** — Data Engineer | Cloud Data Platforms | AI Systems.
+Personal portfolio and technical blog for **Vamshi Raj** — Data Engineer | Cloud Data Platforms | AI Systems.
 
 Built with Next.js (App Router), TypeScript, Tailwind CSS v4, and MDX. Every page is statically generated; there is no database, authentication, or paid service.
 

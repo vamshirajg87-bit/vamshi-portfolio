@@ -1,12 +1,12 @@
 import type { SocialLink } from "@/lib/types";
 
 export const site = {
-  name: "Vamshi Raj Goud",
+  name: "Vamshi Raj",
   shortName: "Vamshi",
-  initials: "VRG",
+  initials: "VR",
   headline: ["Data Engineer", "Cloud Data Platforms", "AI Systems"],
   description:
-    "Vamshi Raj Goud is a Data Engineer with 5+ years of experience building scalable data platforms, distributed data processing, and cloud architecture across Azure, AWS, and GCP.",
+    "Vamshi Raj is a Data Engineer with 5+ years of experience building scalable data platforms, distributed data processing, and cloud architecture across Azure, AWS, and GCP.",
   intro:
     "I design and build scalable data platforms — distributed processing, reliable pipelines, and the cloud architecture underneath them — with a growing focus on AI systems.",
   yearsOfExperience: "5+",
@@ -28,7 +28,13 @@ export const site = {
    * nav item are hidden automatically when there is nothing to show.
    * Example: { label: "Email", href: "mailto:you@example.com", display: "you@example.com" }
    */
-  contact: [] as SocialLink[],
+  contact: [
+    { label: "Email", href: "mailto:vamshirajg87@gmail.com", display: "vamshirajg87@gmail.com" },
+    { label: "LinkedIn", href: "https://www.linkedin.com/in/vamshi-raj-84b374302/", display: "in/vamshi-raj-84b374302" },
+    { label: "GitHub", href: "https://github.com/vamshirajg87-bit", display: "vamshirajg87-bit" },
+  ] as SocialLink[],
+  /** Address used by the "Contact Me" button. */
+  email: "vamshirajg87@gmail.com",
   /** Path to a résumé in /public, e.g. "/resume.pdf". Leave null to hide the button. */
   resumePath: null as string | null,
 };
