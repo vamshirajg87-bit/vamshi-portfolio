@@ -1,0 +1,173 @@
+export const metadata = {
+  title: "Idempotent by Design: Building Data Pipelines You Can Safely Re-run",
+  description:
+    "Why idempotency is the most useful property a batch pipeline can have, and the practical patterns — partition overwrites, MERGE, deterministic keys, and explicit run windows — that get you there.",
+  date: "2026-10-11",
+  tags: ["Data Engineering", "Pipelines", "Snowflake", "Airflow", "dbt"],
+};
+
+Every pipeline eventually runs twice. A task times out after it has already written half its output. An upstream file arrives late and someone triggers a backfill. A scheduler retries a job that actually succeeded but failed to report it. None of this is exotic — it is the normal operating environment for batch data systems.
+
+The question is not *whether* a pipeline will be re-run, but what happens when it is. If the honest answer is "it depends" or "we'd have to check for duplicates," the pipeline is fragile in a way that will surface at the worst possible time.
+
+This article is a practical guide to one property that removes most of that fragility: **idempotency**.
+
+## What idempotency means for a pipeline
+
+An operation is idempotent if running it once or many times produces the same result. For a data pipeline, a useful working definition is:
+
+> Running a job for a given input window any number of times leaves the target in the same state as running it exactly once.
+
+Two details in that definition matter.
+
+First, it is scoped to an **input window** — usually a date or a partition. Idempotency does not mean a job ignores new data; it means the output for a particular window is a deterministic function of the input for that window.
+
+Second, it is about the **state of the target**, not about side effects being avoided entirely. A job may delete and rewrite a partition on every run. That is fine, as long as the end state is the same.
+
+## Why it is worth designing for
+
+Idempotency turns several hard operational problems into routine ones:
+
+- **Retries become safe.** The orchestrator can retry a failed task without anyone reasoning about partial writes.
+- **Backfills become boring.** Reprocessing last month is the same operation as processing today, run over a different window.
+- **Bug fixes are easy to apply.** When transformation logic changes, you re-run the affected windows and the old, incorrect output is replaced rather than duplicated.
+- **Incidents are easier to reason about.** "Just re-run it" is a valid recovery step instead of a gamble.
+
+The cost is some up-front discipline in how jobs read and write data. The patterns below are the ones that do most of the work.
+
+## Pattern 1: Make the run window explicit
+
+The most common source of non-idempotent behavior is a job that decides *what* to process based on when it happens to run:
+
+```sql
+-- Fragile: the result depends on the wall-clock time of the run
+SELECT *
+FROM raw.claims
+WHERE loaded_at >= DATEADD(day, -1, CURRENT_TIMESTAMP());
+```
+
+Run this at 02:00 and again at 09:00 and you get two different, overlapping sets of rows. Instead, pass the window in as a parameter and derive everything from it:
+
+```sql
+-- Deterministic: the window is an input, not a side effect of the clock
+SELECT *
+FROM raw.claims
+WHERE event_date = :run_date;
+```
+
+Orchestrators are built for this. In Airflow, every DAG run has a logical date, exposed to templates as `{{ ds }}` and to tasks through the run context. A job that only ever reads data for its logical date can be re-run for any past date and behave exactly as it did the first time.
+
+A good rule of thumb: **a job should never call `now()` to decide which data to read or write.** Use the clock for audit columns like `processed_at` if you need them, but never for selecting data.
+
+## Pattern 2: Overwrite, don't append
+
+Once the window is explicit, the write side follows naturally: replace the output for that window rather than appending to it.
+
+Plain `INSERT` is the classic trap. Run it twice and you have two copies of every row. The fix is to make the write replace a well-defined slice of the target. In a warehouse, a simple and robust way to do this is delete-then-insert inside a single transaction:
+
+```sql
+BEGIN;
+
+DELETE FROM analytics.daily_claims
+WHERE event_date = :run_date;
+
+INSERT INTO analytics.daily_claims
+SELECT event_date, claim_type, COUNT(*) AS claim_count, SUM(claim_amount) AS total_amount
+FROM staging.claims
+WHERE event_date = :run_date
+GROUP BY event_date, claim_type;
+
+COMMIT;
+```
+
+The transaction matters. Without it, a failure between the delete and the insert leaves the window empty — which is at least visible, but still wrong. With it, readers see either the old version or the new one.
+
+In Spark-based lakehouse environments, the equivalent is overwriting a specific partition rather than the whole table. With Delta Lake, for example, `replaceWhere` limits an overwrite to rows matching a predicate:
+
+```python
+(
+    daily_df.write.format("delta")
+    .mode("overwrite")
+    .option("replaceWhere", f"event_date = '{run_date}'")
+    .saveAsTable("analytics.daily_claims")
+)
+```
+
+Be careful with the broader "overwrite" modes. An unscoped overwrite on a partitioned table can replace far more than the window you meant to touch. Always make the scope of a destructive write explicit.
+
+## Pattern 3: Use MERGE with a real key for upserts
+
+Not every target is naturally partitioned by a run window. Dimension tables and entity snapshots — customers, policies, providers — are usually keyed by a business identifier and updated in place. Here the idempotent tool is `MERGE`:
+
+```sql
+MERGE INTO analytics.dim_policy AS target
+USING staging.policy_updates AS source
+  ON target.policy_id = source.policy_id
+WHEN MATCHED AND source.updated_at > target.updated_at THEN UPDATE SET
+  status      = source.status,
+  holder_name = source.holder_name,
+  updated_at  = source.updated_at
+WHEN NOT MATCHED THEN INSERT (policy_id, status, holder_name, updated_at)
+  VALUES (source.policy_id, source.status, source.holder_name, source.updated_at);
+```
+
+Two details make this genuinely idempotent rather than *mostly* idempotent:
+
+1. **The join key must be unique in the source.** If `staging.policy_updates` contains two rows for the same `policy_id`, the merge is ambiguous. Depending on the platform this either raises an error or produces a nondeterministic result. Deduplicate the source first — for example, keep the latest row per key with `QUALIFY ROW_NUMBER() OVER (PARTITION BY policy_id ORDER BY updated_at DESC) = 1`.
+2. **The update condition should compare versions.** The `source.updated_at > target.updated_at` guard means replaying an older batch cannot overwrite newer data. Without it, re-running yesterday's job after today's would quietly roll records back.
+
+If you use dbt, incremental models express the same idea declaratively. Setting a `unique_key` on an incremental model tells dbt to merge on that key (or delete-and-insert, depending on the adapter and strategy) instead of blindly appending.
+
+## Pattern 4: Generate deterministic keys
+
+Surrogate keys created with a sequence or a random UUID are a subtle source of non-idempotency. Re-run the job and the same logical record gets a different key, which breaks joins and makes deduplication much harder.
+
+Where possible, derive keys from the business identity of the row:
+
+```sql
+SELECT
+  MD5(CONCAT_WS('|', source_system, claim_number, line_number)) AS claim_line_key,
+  ...
+FROM staging.claim_lines;
+```
+
+Hash-based keys like this are stable across runs and across environments. Include a delimiter between fields so that different combinations of values cannot collide by concatenation (`"ab" + "c"` versus `"a" + "bc"`), and make sure every column in the key is non-null or explicitly coalesced, because many concatenation functions return `NULL` if any input is `NULL`.
+
+## Pattern 5: Keep raw data immutable
+
+Idempotent transformations depend on the input for a window being stable. If raw data is updated in place, re-running a job may legitimately produce a different answer — not because the job is wrong, but because its input changed underneath it.
+
+A layered approach avoids this:
+
+- **Raw / landing:** append-only. Files or rows are recorded exactly as received, with load metadata such as source file name and ingestion time.
+- **Staging:** cleaned, typed, and deduplicated, rebuilt deterministically from raw.
+- **Curated / marts:** business-level models built from staging using the patterns above.
+
+Because the raw layer is never rewritten, any downstream layer can be rebuilt from it for any window. That is what makes large backfills and logic changes tractable.
+
+## Pattern 6: Make validation part of the run
+
+Idempotency guarantees that re-running is safe; it does not guarantee that the output is correct. Lightweight checks inside the pipeline catch the problems that idempotency alone will happily reproduce:
+
+- **Uniqueness** on primary and business keys after each write.
+- **Not-null** checks on columns that downstream joins depend on.
+- **Row-count or reconciliation checks** between layers for the same window.
+- **Freshness** checks so that a "successful" run on missing input does not go unnoticed.
+
+dbt's built-in `unique` and `not_null` tests cover a lot of this with very little code. The important design choice is to run these checks as part of the pipeline and to fail loudly, rather than discovering duplicates in a dashboard weeks later.
+
+## A quick checklist
+
+When reviewing a batch job, these questions surface most idempotency problems:
+
+1. Is the processing window passed in explicitly, or derived from the current time?
+2. Does every write replace a well-defined slice of the target, or does it append?
+3. Are destructive writes scoped to that slice and wrapped in a transaction where the platform supports it?
+4. For upserts, is the merge key unique in the source, and is there a version guard?
+5. Are keys derived deterministically from the data?
+6. Is the raw input for a window immutable?
+7. Do data quality checks run as part of the job and fail it when they should?
+
+## Closing thought
+
+Idempotency is not a feature you add at the end; it is a property that emerges from many small decisions about how data is read and written. The good news is that the patterns are simple and composable. A pipeline that reads an explicit window, overwrites rather than appends, merges on real keys, and validates its own output is a pipeline you can re-run without hesitation — and that is what makes it operable.
