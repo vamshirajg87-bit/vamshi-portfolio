@@ -25,6 +25,13 @@ export function Button({ href, children, variant = "primary", external = false }
       </a>
     );
   }
+  if (href.startsWith("mailto:")) {
+    return (
+      <a href={href} className={className}>
+        {children}
+      </a>
+    );
+  }
   return (
     <Link href={href} className={className}>
       {children}
