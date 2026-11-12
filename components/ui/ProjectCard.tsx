@@ -24,6 +24,7 @@ export function ProjectCard({ project, index }: { project: Project; index: numbe
   const planned = project.planned ?? [];
   const stages = project.stages ?? [];
   const links = project.links ?? [];
+  const screenshots = project.screenshots ?? [];
 
   return (
     <article
@@ -66,6 +67,57 @@ export function ProjectCard({ project, index }: { project: Project; index: numbe
         <div className="mt-8 grid gap-8 md:grid-cols-2">
           {implemented.length > 0 ? <List title="Implemented" items={implemented} tone="blue" /> : null}
           {planned.length > 0 ? <List title="Planned" items={planned} tone="violet" /> : null}
+        </div>
+      ) : null}
+
+      {screenshots.length > 0 ? (
+        <div className="mt-8">
+          {project.screenshotsNote ? (
+            <p className="mb-3 max-w-3xl text-sm leading-relaxed text-muted">{project.screenshotsNote}</p>
+          ) : null}
+          <details className="group/gallery rounded-xl border border-line bg-surface-2/40">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-4 py-3 font-mono text-xs uppercase tracking-[0.18em] text-blue-soft transition-colors hover:text-fg [&::-webkit-details-marker]:hidden">
+              <span>
+                View screenshots ({screenshots.length})
+                <span className="sr-only"> of {project.title}</span>
+              </span>
+              <span
+                aria-hidden="true"
+                className="text-base leading-none transition-transform duration-200 group-open/gallery:rotate-45"
+              >
+                +
+              </span>
+            </summary>
+            <ol className="grid items-start gap-6 border-t border-line p-4 sm:p-6 md:grid-cols-2">
+              {screenshots.map((shot) => (
+                <li key={shot.src} className="min-w-0">
+                  <figure>
+                    <a
+                      href={shot.src}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group/shot block rounded-lg"
+                    >
+                      {/* Static PNGs served from /public; the image optimizer is not needed here. */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={shot.src}
+                        alt={shot.alt}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-auto w-full rounded-lg border border-line transition-colors group-hover/shot:border-blue/60 group-focus-visible/shot:border-blue/60"
+                      />
+                      <span className="mt-2 inline-block font-mono text-xs text-blue-soft underline-offset-4 group-hover/shot:underline group-focus-visible/shot:underline">
+                        Open full-size image
+                        <span className="sr-only"> (opens in a new tab)</span>
+                      </span>
+                    </a>
+                    <figcaption className="mt-3 text-sm leading-relaxed text-muted">{shot.caption}</figcaption>
+                  </figure>
+                </li>
+              ))}
+            </ol>
+          </details>
         </div>
       ) : null}
 
