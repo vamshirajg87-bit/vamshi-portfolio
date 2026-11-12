@@ -23,7 +23,16 @@ export type SkillGroup = {
   skills: string[];
 };
 
-export type ProjectStatus = "In development" | "Completed";
+export type ProjectStatus = "In development" | "Completed" | "Public technical preview";
+
+export type ProjectScreenshot = {
+  /** Path under /public, e.g. "/screenshots/example.png". */
+  src: string;
+  /** Descriptive alternative text for the image. */
+  alt: string;
+  /** Short visible caption shown under the image. */
+  caption: string;
+};
 
 export type Project = {
   slug: string;
@@ -40,6 +49,10 @@ export type Project = {
   stages?: { name: string; description: string }[];
   /** Only real, working links. Omit rather than guessing. */
   links?: { label: string; href: string }[];
+  /** Optional gallery, shown collapsed. Section is hidden when empty. */
+  screenshots?: ProjectScreenshot[];
+  /** Visible disclosure shown next to the gallery (for example, that the data is synthetic). */
+  screenshotsNote?: string;
 };
 
 export type PostMeta = {
